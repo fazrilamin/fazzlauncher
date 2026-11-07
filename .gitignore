@@ -1,0 +1,12 @@
+# Build output
+FazzLauncher/build/
+
+# Signing keys: never commit these (each builder makes their own on first build)
+FazzLauncher/keystore/
+*.jks
+*.keystore
+*.idsig
+
+# Local logs, captures and screenshots made while debugging
+*.log
+shot*.png
