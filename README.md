@@ -4,6 +4,8 @@ A custom launcher for Android car head units, plus a complete, **no-root** guide
 
 Built and tested on a **Topway T9** head unit (Allwinner T527, Android 13, 1280×720), from a Windows PC on the same Wi-Fi.
 
+> ⚠️ **Use at your own risk.** Fazz Launcher and this guide were tested on one head unit only (the author's Topway T9). Other units, firmware versions and brands may behave differently. Changing a head unit over ADB can, in the worst case, leave it unusable (bricked). The author is not responsible for any damage, data loss or problems. See [Disclaimer](#disclaimer).
+
 ![Home screen](screenshots/home.png)
 
 ### Skins (new in 2.0)
@@ -47,7 +49,7 @@ Pick one from **All apps → Skins**, or long-press the clock.
    - Easiest: the ready-made APK from [Releases](https://github.com/fazrilamin/fazzlauncher/releases) (also in [`release/`](release/)), made for Topway 1280×720 units.
    - Or build it yourself: [docs/02-build-install.md](docs/02-build-install.md).
    ```
-   adb install -r release/FazzLauncher-2.0.apk
+   adb install -r release/FazzLauncher-2.1.apk
    adb shell pm grant com.fazrilamin.fazzlauncher android.permission.ACCESS_FINE_LOCATION
    adb shell cmd notification allow_listener com.fazrilamin.fazzlauncher/com.fazrilamin.fazzlauncher.MediaListener
    adb shell am start -n com.fazrilamin.fazzlauncher/.MainActivity                       # try it first
@@ -57,7 +59,7 @@ Pick one from **All apps → Skins**, or long-press the clock.
    - On the unit: Settings → Apps → Default apps → Home app, or use Fazz Launcher's **All apps → Stock Home**.
    - Over ADB: `adb uninstall com.fazrilamin.fazzlauncher`.
 
-Release APK (2.0) SHA-256: `20ed3737a4ce2d5e77b4dca7c679c7c0783617e28ad758a5511a57529f8c97f9`. What changed: [CHANGELOG.md](CHANGELOG.md).
+Release APK (2.1) SHA-256: `bf8fbf017ed686dea0cf2f4f3a9a7ebd46ac7f2e824f092213cf5de81b924fb4`. What changed: [CHANGELOG.md](CHANGELOG.md).
 
 ## Using an AI agent (Claude Code, Codex)
 
@@ -76,7 +78,6 @@ This repo is written so an AI coding agent can repeat the whole setup on **your*
 | [05 – Debloat](docs/05-debloat.md) | Which vendor apps are safe to remove (reversibly), which to never touch |
 | [06 – Radio crash case study](docs/06-radio-crash.md) | Tracing a vendor app's crash from logs and bytecode, without root |
 | [07 – Troubleshooting](docs/07-troubleshooting.md) | Common problems and fixes |
-| [08 – Publishing a release](docs/08-release.md) | Versioning, GitHub Desktop, tagging and attaching the APK |
 
 Helper scripts in [`tools/`](tools/):
 - `find-headunit.ps1` / `.sh` find the unit on your Wi-Fi.
@@ -94,7 +95,12 @@ Helper scripts in [`tools/`](tools/):
 
 ## Disclaimer
 
-Use at your own risk, on a unit you own. Don't operate the head unit or follow these steps while driving. This project isn't affiliated with Topway, DoFun, or any car maker. The RPM and gear readings are estimates, not engine data.
+- **Use at your own risk**, and only on a unit you own. There is no warranty: as the [MIT licence](LICENSE) says, the software is provided "as is".
+- **Tested on one unit only:** a Topway T9 (Allwinner T527, Android 13, 1280×720). The skins, and especially skin 2's Google Maps window (a Topway firmware feature), may not work, or may work differently, on other units or firmware.
+- **Bricking risk:** ADB commands, removing vendor apps and changing system settings can make a head unit unstable or, in the worst case, unusable. Read [docs/05-debloat.md](docs/05-debloat.md) before removing anything, and never remove the stock launcher.
+- **The author is not responsible** for any damage to your head unit, car or data, for lost warranty, or for anything else that happens from using this project.
+- Don't operate the head unit or follow these steps while driving.
+- This project isn't affiliated with Topway, DoFun, Google, or any car maker. The RPM and gear readings are estimates, not engine data.
 
 ## Credits
 

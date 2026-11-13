@@ -46,6 +46,7 @@ Other units will differ. Inspect before you change anything (Phase 2).
 
 ## Ask the owner first
 
+- **Tell them the risk first:** everything here was tested on one unit only (the author's Topway T9). In the worst case, changes over ADB can leave a head unit unusable, and the author is not responsible. Get their OK to proceed at their own risk before Phase 5.
 - Head unit brand and model, chip, and Android version (Settings → About). A photo of the About screen is fine.
 - Does Developer options open? What does it ask for when they switch on **Wireless debugging**?
 - Which apps do they want on the home screen? The defaults are Spotify, YouTube, Google Maps and the vendor Radio.

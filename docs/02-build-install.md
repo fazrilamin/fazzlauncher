@@ -2,14 +2,14 @@
 
 ## Option A: ready-made APK (no build)
 
-[`release/FazzLauncher-2.0.apk`](../release/) is set up for the reference unit:
+[`release/FazzLauncher-2.1.apk`](../release/) is set up for the reference unit:
 - Topway (DoFun) stock launcher, 1280×720;
 - shortcuts for Spotify, YouTube, Google Maps and the Topway radio;
 - a typical 4-speed-automatic RPM model;
 - Malaysian prayer times.
 
 ```
-adb install -r release/FazzLauncher-2.0.apk
+adb install -r release/FazzLauncher-2.1.apk
 ```
 
 Then continue at **Grant permissions** below. If you later build it yourself, uninstall this APK first, because your build is signed with a different key.

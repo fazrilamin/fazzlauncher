@@ -23,6 +23,6 @@ Steps:
 
 ## Tips
 
-- **Want just the APK?** Say so; the agent can install `release/FazzLauncher-2.0.apk` instead of building. It only fits Topway 1280×720 units well.
+- **Want just the APK?** Say so; the agent can install `release/FazzLauncher-2.1.apk` instead of building. It only fits Topway 1280×720 units well.
 - **Have a crash or glitch?** Ask the agent to follow `docs/06-radio-crash.md`'s method: crash buffer, exit-info, then bytecode.
 - **Sharing screenshots?** Ask the agent to turn on privacy mode first (`--ez hide_town true`).

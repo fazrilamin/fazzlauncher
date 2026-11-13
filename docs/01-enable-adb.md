@@ -2,7 +2,7 @@
 
 ADB lets a PC on the same Wi-Fi install apps, read logs and change settings on the head unit. Many aftermarket head units hide it. This guide covers how it was switched on for the **Topway T9 (Allwinner T527, Android 13)**, plus what to try on other units.
 
-> Use at your own risk, and only on a unit you own. Do this while parked.
+> Use at your own risk, and only on a unit you own. Do this while parked. Tested on one unit only. In the worst case, changes over ADB can leave a unit unusable. The author is not responsible.
 
 ## Topway units (tested on T9 / T527)
 

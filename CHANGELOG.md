@@ -2,12 +2,21 @@
 
 Version numbers: the first number goes up for big new features (like skins), the second for fixes and small improvements. `versionCode` in `FazzLauncher/AndroidManifest.xml` goes up by 1 with every release.
 
+## 2.1 (2026-11-13)
+
+Documentation release. The app works exactly as in 2.0; only its version number changed.
+
+- **Disclaimer:** a "use at your own risk" warning at the top of the README and an expanded Disclaimer section. Everything was tested on one head unit only, changes over ADB can leave a unit unusable in the worst case, and the author is not responsible.
+- `AGENTS.md`: agents must explain these risks to the owner and get their OK before installing.
+- `CLAUDE.md`: more notes for Claude Code (test loop, ADB test extras after a reinstall, skin 2 testing).
+- The maintainer's release guide was removed from the public docs.
+
 ## 2.0 (2026-11-13)
 
 ### New
 - **Skins.** Pick one from **All apps → Skins**, by long-pressing the clock, or from the cluster menu:
   - **1 · Classic:** the 1.0 layout.
-  - **2 · Map:** the real Google Maps app in a window on the home screen (no API key), with a clock strip, a digital speedometer and the next prayer. Tap the Maps tile for full screen; press Home to put it back in the window. Uses the Topway firmware's navigation window (see [docs/04-how-it-works.md](docs/04-how-it-works.md#skin-2-the-google-maps-window)).
+  - **2 · Map:** the real Google Maps app in a window on the home screen (no API key), with a clock strip, a digital speedometer and the next prayer. Tap the Maps tile for full screen; press Home to put it back in the window. Uses the Topway firmware's navigation window (see [docs/04-how-it-works.md](docs/04-how-it-works.md#skin-2-the-google-maps-window)). Tested only on the author's Topway T9; it may not work on other units or firmware.
   - **3 · Twin dials:** an analog speedometer and tachometer with needles, a side column with the clock, and the next prayer.
 - Trip, speed limit and demo carry over when you switch skins.
 - **Braking feedback:** "Braking" (from about 0.08 g), "Smooth braking" (about 0.17 g) and "Hard braking" (about 0.28 g). Each stays on screen for at least 2 seconds.
