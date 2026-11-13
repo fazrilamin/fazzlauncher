@@ -10,6 +10,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -46,6 +47,7 @@ import org.json.JSONObject;
 
 import java.text.DateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Date;
@@ -69,16 +71,34 @@ public class MainActivity extends Activity implements LocationListener {
         new ComponentName("com.dofun.variety", "com.dofun.overseasvariety.Launcher");
     private static final String DEFAULT_MEDIA_APP = "com.spotify.music";
 
+    // Skins: the home layout the driver picked (prefs "skin"). The drawer and all data logic are shared.
+    static final int SKIN_CLASSIC = 1, SKIN_MAP = 2, SKIN_DIALS = 3;
+    private static final String[] SKIN_LABELS = {"1 · Classic", "2 · Map (Google Maps on the home screen)", "3 · Twin dials"};
+    /** Marks our own round trip in {@link MapHost#sendBehind}, so onNewIntent ignores it. */
+    private static final String EXTRA_INTERNAL = "fazz_internal";
+
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService bg = Executors.newCachedThreadPool();
     private SharedPreferences prefs;
     private float density;
+    private int skin;
+    private FrameLayout root;
+    private View home;
+    private boolean resumed;
+    private DateFormat timeFormat;
 
-    // Location / speed
+    // Location / speed. One model for every skin, so trip, limit and demo survive a skin change.
     private LocationManager lm;
     private Location lastLoc;
     private long lastFixAt; // elapsedRealtime of last GPS fix
-    private ClusterView cluster;
+    private final DriveModel model = new DriveModel();
+    private DriveView drive;
+
+    // Skin 2: Google Maps window (see MapHost)
+    private boolean mapAvailable;
+    private int mapSuppress;   // > 0 while the drawer or a dialog needs the Maps window out of the way
+    private View mapFrame;
+    private TextView nextName, nextTime;
 
     // Clock panel
     private TextView hijriView, weatherTemp, weatherDesc;
@@ -119,9 +139,15 @@ public class MainActivity extends Activity implements LocationListener {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
-        FrameLayout root = new FrameLayout(this);
+        timeFormat = android.text.format.DateFormat.getTimeFormat(this);
+        model.load(prefs);
+        skin = prefs.getInt("skin", SKIN_CLASSIC);
+        mapAvailable = MapHost.available(this);
+
+        root = new FrameLayout(this);
         root.setBackgroundColor(BG);
-        root.addView(buildHome(), new FrameLayout.LayoutParams(-1, -1));
+        home = buildHome();
+        root.addView(home, new FrameLayout.LayoutParams(-1, -1));
         drawer = buildDrawer();
         drawer.setVisibility(View.GONE);
         root.addView(drawer, new FrameLayout.LayoutParams(-1, -1));
@@ -150,14 +176,24 @@ public class MainActivity extends Activity implements LocationListener {
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
         setupMedia();
+        // HOME (or closing another app) puts Maps behind us: bring it back into its window.
+        showMapSoon();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        resumed = false;
+        ui.removeCallbacks(showMap);
     }
 
     @Override
     protected void onStop() {
         super.onStop();
         ui.removeCallbacks(tick);
-        cluster.model.save(prefs);
+        model.save(prefs);
         try {
             lm.removeUpdates(this);
         } catch (Exception ignored) {
@@ -175,9 +211,12 @@ public class MainActivity extends Activity implements LocationListener {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (intent.getBooleanExtra(EXTRA_INTERNAL, false)) return; // our own MapHost.sendBehind()
         closeDrawer(); // Home pressed while already home
         // For testing over ADB: am start -n com.fazrilamin.fazzlauncher/.MainActivity --ez demo true
-        if (intent.getBooleanExtra("demo", false)) cluster.startDemo();
+        if (intent.getBooleanExtra("demo", false)) drive.startDemo();
+        // Skin switch over ADB: --ei skin 1|2|3
+        if (intent.hasExtra("skin")) applySkin(intent.getIntExtra("skin", SKIN_CLASSIC));
         // Privacy mode for screenshots: am start -n com.fazrilamin.fazzlauncher/.MainActivity --ez hide_town true|false
         if (intent.hasExtra("hide_town")) {
             prefs.edit().putBoolean("hide_town", intent.getBooleanExtra("hide_town", false)).apply();
@@ -202,8 +241,8 @@ public class MainActivity extends Activity implements LocationListener {
         public void run() {
             tickCount++;
             boolean fix = lastFixAt != 0 && SystemClock.elapsedRealtime() - lastFixAt < 5000;
-            cluster.setGps(fix);
-            if (tickCount % 10 == 0) cluster.model.save(prefs);
+            drive.setGps(fix);
+            if (tickCount % 10 == 0) model.save(prefs);
             renderPrayer();
             if (tickCount % 5 == 1) {
                 maybeFetchPrayer();
@@ -217,7 +256,12 @@ public class MainActivity extends Activity implements LocationListener {
 
     // ------------------------------------------------------------------ layout
 
+    // ------------------------------------------------------------------ skins
+
     private View buildHome() {
+        clearViewRefs();
+        if (skin == SKIN_MAP) return buildHomeMap();
+
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(dp(20), dp(20), dp(20), dp(20));
@@ -225,25 +269,297 @@ public class MainActivity extends Activity implements LocationListener {
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         col.addView(top, new LinearLayout.LayoutParams(-1, 0, 1f));
-        top.addView(buildClockPanel(), weighted(0.9f, 0));
-        top.addView(buildSpeedPanel(), weighted(1.3f, dp(16)));
-        top.addView(buildPrayerPanel(), weighted(0.9f, dp(16)));
+        if (skin == SKIN_DIALS) {
+            top.addView(buildDrivePanel(new TwinDialView(this, model)), weighted(2.3f, 0));
+            top.addView(buildSideColumn(), weighted(0.8f, dp(16)));
+        } else {
+            top.addView(buildClockPanel(), weighted(0.9f, 0));
+            top.addView(buildDrivePanel(new ClusterView(this, model)), weighted(1.3f, dp(16)));
+            top.addView(buildPrayerPanel(), weighted(0.9f, dp(16)));
+        }
 
-        LinearLayout bottom = new LinearLayout(this);
-        bottom.setOrientation(LinearLayout.HORIZONTAL);
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, dp(176));
         blp.topMargin = dp(16);
-        col.addView(bottom, blp);
-        bottom.addView(buildMediaCard(), weighted(1.5f, 0));
-        for (String[] t : TILES) bottom.addView(buildTile(t), weighted(0.5f, dp(16)));
-        bottom.addView(buildAllAppsTile(), weighted(0.5f, dp(16)));
+        col.addView(buildBottomRow(false), blp);
         return col;
     }
+
+    /** Views of the previous skin must not be updated any more. */
+    private void clearViewRefs() {
+        hijriView = weatherTemp = weatherDesc = null;
+        prayerHeader = countdown = placeView = zoneView = null;
+        nextName = nextTime = null;
+        mapFrame = null;
+        Arrays.fill(pName, null);
+        Arrays.fill(pTime, null);
+        Arrays.fill(pRow, null);
+    }
+
+    private void applySkin(int n) {
+        if (n < SKIN_CLASSIC || n > SKIN_DIALS) n = SKIN_CLASSIC;
+        if (n == skin) return;
+        // Leaving the map skin: take the Maps window off the home screen (unless a dialog already did).
+        if (skin == SKIN_MAP && mapAvailable && mapSuppress == 0) MapHost.sendBehind(this, internalHome());
+        skin = n;
+        prefs.edit().putInt("skin", n).apply();
+        model.save(prefs);
+        root.removeView(home);
+        home = buildHome();
+        root.addView(home, 0, new FrameLayout.LayoutParams(-1, -1));
+        parsedKey = "";
+        highlighted = -2;
+        showCachedWeather();
+        renderPrayer();
+        setupMedia();
+        drive.setGps(lastFixAt != 0 && SystemClock.elapsedRealtime() - lastFixAt < 5000);
+        showMapSoon();
+    }
+
+    private void showSkinMenu() {
+        suppressMap();
+        android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Skin")
+            .setSingleChoiceItems(SKIN_LABELS, skin - 1, (d, i) -> {
+                applySkin(i + 1); // before dismiss, so the map is placed only once
+                d.dismiss();
+            })
+            .create();
+        dlg.setOnDismissListener(d -> unsuppressMap());
+        dlg.show();
+    }
+
+    private void longPressForSkins(View v) {
+        v.setLongClickable(true);
+        v.setOnLongClickListener(x -> {
+            showSkinMenu();
+            return true;
+        });
+    }
+
+    // ------------------------------------------------------------------ skin 2: Google Maps window
+
+    private final Runnable showMap = () -> {
+        if (skin == SKIN_MAP && mapAvailable && mapSuppress == 0 && resumed && !drawerOpen()) MapHost.show(this);
+    };
+
+    private void showMapSoon() {
+        ui.removeCallbacks(showMap);
+        if (skin == SKIN_MAP && mapAvailable && mapSuppress == 0) ui.postDelayed(showMap, 350);
+    }
+
+    /** The drawer or a dialog is opening: move the Maps window out of the way (it floats above us). */
+    private void suppressMap() {
+        ui.removeCallbacks(showMap);
+        if (mapSuppress++ == 0 && skin == SKIN_MAP && mapAvailable) MapHost.sendBehind(this, internalHome());
+    }
+
+    private void unsuppressMap() {
+        if (mapSuppress == 0) return;
+        if (--mapSuppress == 0) showMapSoon();
+    }
+
+    private Intent internalHome() {
+        return new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            .setClass(this, MainActivity.class)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .putExtra(EXTRA_INTERNAL, true);
+    }
+
+    /**
+     * Skin 2. The Maps window's position is fixed by the firmware ({@link MapHost#bounds()}), so the
+     * panels are placed around it in absolute pixels once the screen offset of this view is known.
+     */
+    private View buildHomeMap() {
+        FrameLayout f = new FrameLayout(this);
+
+        LinearLayout frame = panel();
+        frame.setGravity(Gravity.CENTER);
+        ImageView mi = new ImageView(this);
+        mi.setImageDrawable(appIcon(MapHost.PKG));
+        frame.addView(mi, new LinearLayout.LayoutParams(dp(64), dp(64)));
+        TextView mt = text("Google Maps", 20, TEXT, "sans-serif-medium");
+        mt.setPadding(0, dp(12), 0, dp(4));
+        mt.setGravity(Gravity.CENTER);
+        frame.addView(mt, new LinearLayout.LayoutParams(-1, -2));
+        TextView mh = text(mapAvailable ? "Tap to show the map here" : "Map window not available: tap to open Maps",
+            15, SUB, "sans-serif");
+        mh.setGravity(Gravity.CENTER);
+        frame.addView(mh, new LinearLayout.LayoutParams(-1, -2));
+        pressable(frame);
+        frame.setOnClickListener(v -> {
+            if (mapAvailable) MapHost.show(this);
+            else launch(MapHost.PKG, null);
+        });
+        mapFrame = frame;
+        f.addView(frame, new FrameLayout.LayoutParams(0, 0));
+
+        LinearLayout right = new LinearLayout(this);
+        right.setOrientation(LinearLayout.VERTICAL);
+        right.addView(buildClockStrip());
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(-1, 0, 1f);
+        dlp.topMargin = dp(12);
+        right.addView(buildDrivePanel(new DigitalSpeedView(this, model)), dlp);
+        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(-1, -2);
+        nlp.topMargin = dp(12);
+        right.addView(buildNextPrayerCard(), nlp);
+        f.addView(right, new FrameLayout.LayoutParams(0, 0));
+
+        View bottom = buildBottomRow(true);
+        f.addView(bottom, new FrameLayout.LayoutParams(0, 0));
+
+        f.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> f.post(() -> placeMapSkin(f, frame, right, bottom)));
+        return f;
+    }
+
+    private void placeMapSkin(FrameLayout f, View frame, View right, View bottom) {
+        int w = f.getWidth(), h = f.getHeight();
+        if (w == 0 || h == 0) return;
+        int[] loc = new int[2];
+        f.getLocationOnScreen(loc);
+        Rect m = new Rect(MapHost.bounds());
+        m.offset(-loc[0], -loc[1]);
+        int fl = m.left - dp(10), ft = Math.max(dp(8), m.top - dp(10));
+        int fr = m.right + dp(10), fb = m.bottom + dp(14); // the window sits ~4 px below the property rect
+        place(frame, fl, ft, fr - fl, fb - ft);
+        place(right, fr + dp(16), ft, w - dp(20) - fr - dp(16), fb - ft);
+        place(bottom, dp(20), fb + dp(14), w - dp(40), h - dp(20) - fb - dp(14));
+    }
+
+    private static void place(View v, int x, int y, int w, int h) {
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) v.getLayoutParams();
+        if (lp.leftMargin == x && lp.topMargin == y && lp.width == w && lp.height == h) return;
+        lp.leftMargin = x;
+        lp.topMargin = y;
+        lp.width = Math.max(0, w);
+        lp.height = Math.max(0, h);
+        v.setLayoutParams(lp);
+    }
+
+    /** Skin 2: time, date and weather in one compact card. Long-press = skins. */
+    private View buildClockStrip() {
+        LinearLayout p = panel();
+        p.setOrientation(LinearLayout.HORIZONTAL);
+        p.setGravity(Gravity.CENTER_VERTICAL);
+        p.setPadding(dp(20), dp(12), dp(20), dp(12));
+        TextClock clock = new TextClock(this);
+        clock.setFormat24Hour("HH:mm");
+        clock.setFormat12Hour("h:mm");
+        style(clock, 44, TEXT, "sans-serif-light");
+        clock.setIncludeFontPadding(false);
+        p.addView(clock);
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        info.setPadding(dp(16), 0, 0, 0);
+        TextClock date = new TextClock(this);
+        date.setFormat24Hour("EEE, d MMM");
+        date.setFormat12Hour("EEE, d MMM");
+        style(date, 16, SUB, "sans-serif");
+        info.addView(date);
+        LinearLayout w = new LinearLayout(this);
+        weatherTemp = text("--°", 16, TEXT, "sans-serif-medium");
+        w.addView(weatherTemp);
+        weatherDesc = text("", 16, SUB, "sans-serif");
+        weatherDesc.setPadding(dp(8), 0, 0, 0);
+        weatherDesc.setSingleLine(true);
+        weatherDesc.setEllipsize(TextUtils.TruncateAt.END);
+        w.addView(weatherDesc);
+        info.addView(w);
+        p.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
+        longPressForSkins(p);
+        return p;
+    }
+
+    /** Skin 3: clock, Hijri date and weather above the next-prayer card. Long-press = skins. */
+    private View buildSideColumn() {
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout p = panel();
+        p.setGravity(Gravity.CENTER_VERTICAL);
+        p.setPadding(dp(22), dp(16), dp(22), dp(16));
+        TextClock clock = new TextClock(this);
+        clock.setFormat24Hour("HH:mm");
+        clock.setFormat12Hour("h:mm");
+        style(clock, 60, TEXT, "sans-serif-light");
+        clock.setIncludeFontPadding(false);
+        p.addView(clock);
+        TextClock date = new TextClock(this);
+        date.setFormat24Hour("EEEE, d MMM");
+        date.setFormat12Hour("EEEE, d MMM");
+        style(date, 16, SUB, "sans-serif");
+        date.setPadding(0, dp(4), 0, 0);
+        p.addView(date);
+        hijriView = text("", 15, SUB, "sans-serif");
+        p.addView(hijriView);
+        LinearLayout w = new LinearLayout(this);
+        w.setGravity(Gravity.BOTTOM);
+        w.setPadding(0, dp(12), 0, 0);
+        weatherTemp = text("--°", 30, TEXT, "sans-serif-light");
+        weatherTemp.setIncludeFontPadding(false);
+        w.addView(weatherTemp);
+        weatherDesc = text("", 15, SUB, "sans-serif");
+        weatherDesc.setPadding(dp(10), 0, 0, dp(3));
+        weatherDesc.setSingleLine(true);
+        weatherDesc.setEllipsize(TextUtils.TruncateAt.END);
+        w.addView(weatherDesc);
+        p.addView(w);
+        longPressForSkins(p);
+        col.addView(p, new LinearLayout.LayoutParams(-1, 0, 1f));
+        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(-1, -2);
+        nlp.topMargin = dp(16);
+        col.addView(buildNextPrayerCard(), nlp);
+        return col;
+    }
+
+    /** Skins 2 and 3: only the next prayer, its time, the countdown and the place. */
+    private View buildNextPrayerCard() {
+        LinearLayout p = panel();
+        p.setPadding(dp(20), dp(14), dp(20), dp(14));
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        prayerHeader = text("WAKTU SOLAT", 13, SUB, "sans-serif-medium");
+        prayerHeader.setLetterSpacing(0.08f);
+        head.addView(prayerHeader, new LinearLayout.LayoutParams(0, -2, 1f));
+        zoneView = text("", 12, ACCENT, "sans-serif-medium");
+        zoneView.setPadding(dp(8), dp(2), dp(8), dp(2));
+        zoneView.setBackground(rounded(ACCENT_BG, 6, 0));
+        zoneView.setVisibility(View.GONE);
+        head.addView(zoneView);
+        p.addView(head);
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(4), 0, 0);
+        nextName = text("--", 28, ACCENT, "sans-serif-medium");
+        row.addView(nextName, new LinearLayout.LayoutParams(0, -2, 1f));
+        nextTime = text("--:--", 28, TEXT, "sans-serif-medium");
+        row.addView(nextTime);
+        p.addView(row);
+        countdown = text("", 15, ACCENT, "sans-serif");
+        p.addView(countdown);
+        placeView = text("", 14, SUB, "sans-serif");
+        placeView.setSingleLine(true);
+        placeView.setEllipsize(TextUtils.TruncateAt.END);
+        placeView.setPadding(0, dp(2), 0, 0);
+        p.addView(placeView);
+        return p;
+    }
+
+    private View buildBottomRow(boolean compact) {
+        LinearLayout bottom = new LinearLayout(this);
+        bottom.setOrientation(LinearLayout.HORIZONTAL);
+        int gap = dp(compact ? 12 : 16);
+        bottom.addView(buildMediaCard(compact), weighted(1.5f, 0));
+        for (String[] t : TILES) bottom.addView(buildTile(t, compact), weighted(0.5f, gap));
+        bottom.addView(buildAllAppsTile(compact), weighted(0.5f, gap));
+        return bottom;
+    }
+
+    // ------------------------------------------------------------------ skin 1 panels
 
     private View buildClockPanel() {
         LinearLayout p = panel();
         p.setGravity(Gravity.CENTER_VERTICAL);
         p.setPadding(dp(24), dp(20), dp(24), dp(20));
+        longPressForSkins(p);
 
         TextClock clock = new TextClock(this);
         clock.setFormat24Hour("HH:mm");
@@ -277,53 +593,64 @@ public class MainActivity extends Activity implements LocationListener {
         return p;
     }
 
-    private View buildSpeedPanel() {
+    /** The skin's speed display in a panel. Long-press opens the cluster menu. */
+    private View buildDrivePanel(DriveView v) {
         LinearLayout p = panel();
         p.setPadding(dp(10), dp(10), dp(10), dp(8));
-        cluster = new ClusterView(this, prefs);
-        cluster.setLongClickable(true);
-        cluster.setOnLongClickListener(v -> {
+        drive = v;
+        v.setLongClickable(true);
+        v.setOnLongClickListener(x -> {
             showClusterMenu();
             return true;
         });
-        p.addView(cluster, new LinearLayout.LayoutParams(-1, -1));
+        p.addView(v, new LinearLayout.LayoutParams(-1, -1));
         return p;
     }
 
-    /** Long-press on the cluster: speed limit, reset trip, demo drive. */
+    /** Long-press on the speed display: speed limit, reset trip, demo drive, skin. */
     private void showClusterMenu() {
-        DriveModel m = cluster.model;
+        DriveModel m = model;
         String limit = m.limit > 0 ? m.limit + " km/h" : "Off";
-        String[] items = {"Speed limit: " + limit, "Reset trip", m.demo ? "Stop demo" : "Demo drive (60 s)"};
-        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        String[] items = {"Speed limit: " + limit, "Reset trip", m.demo ? "Stop demo" : "Demo drive (60 s)", "Skin…"};
+        suppressMap();
+        android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle("Drive cluster")
-            .setItems(items, (dlg, which) -> {
+            .setItems(items, (d, which) -> {
                 if (which == 0) {
                     final int[] values = {60, 80, 90, 110, 130, 0};
                     String[] labels = {"60 km/h", "80 km/h", "90 km/h", "110 km/h", "130 km/h", "Off"};
                     int sel = 3;
                     for (int i = 0; i < values.length; i++) if (values[i] == m.limit) sel = i;
-                    new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    suppressMap();
+                    android.app.AlertDialog d2 = new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                         .setTitle("Speed limit warning")
-                        .setSingleChoiceItems(labels, sel, (d2, i) -> {
+                        .setSingleChoiceItems(labels, sel, (x, i) -> {
                             m.limit = values[i];
                             m.save(prefs);
-                            cluster.invalidate();
-                            d2.dismiss();
+                            drive.invalidate();
+                            x.dismiss();
                         })
-                        .show();
+                        .create();
+                    d2.setOnDismissListener(x -> unsuppressMap());
+                    d2.show();
                 } else if (which == 1) {
                     m.resetTrip();
                     m.save(prefs);
-                    cluster.invalidate();
-                } else if (m.demo) {
-                    m.stopDemo();
-                    cluster.invalidate();
+                    drive.invalidate();
+                } else if (which == 2) {
+                    if (m.demo) {
+                        m.stopDemo();
+                        drive.invalidate();
+                    } else {
+                        drive.startDemo();
+                    }
                 } else {
-                    cluster.startDemo();
+                    showSkinMenu();
                 }
             })
-            .show();
+            .create();
+        dlg.setOnDismissListener(d -> unsuppressMap());
+        dlg.show();
     }
 
     private View buildPrayerPanel() {
@@ -370,31 +697,34 @@ public class MainActivity extends Activity implements LocationListener {
         return p;
     }
 
-    private View buildMediaCard() {
+    /** Media card. Compact (skin 2, short bottom row): art, title and controls side by side. */
+    private View buildMediaCard(boolean compact) {
         LinearLayout card = panel();
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
-        card.setPadding(dp(16), dp(16), dp(16), dp(16));
+        int pad = dp(compact ? 12 : 16);
+        card.setPadding(pad, pad, pad, pad);
         pressable(card);
         card.setOnClickListener(v -> openMediaApp());
 
         mediaArt = new ImageView(this);
         mediaArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        mediaArt.setBackground(rounded(STROKE, 16, 0));
+        mediaArt.setBackground(rounded(STROKE, compact ? 12 : 16, 0));
         mediaArt.setClipToOutline(true);
-        card.addView(mediaArt, new LinearLayout.LayoutParams(dp(144), dp(144)));
+        int art = dp(compact ? 80 : 144);
+        card.addView(mediaArt, new LinearLayout.LayoutParams(art, art));
 
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
-        info.setPadding(dp(18), 0, 0, 0);
-        mediaTitle = text("Nothing playing", 21, TEXT, "sans-serif-medium");
+        info.setPadding(dp(compact ? 14 : 18), 0, 0, 0);
+        mediaTitle = text("Nothing playing", compact ? 17 : 21, TEXT, "sans-serif-medium");
         mediaTitle.setSingleLine(true);
         mediaTitle.setEllipsize(TextUtils.TruncateAt.END);
         info.addView(mediaTitle);
-        mediaSub = text("", 16, SUB, "sans-serif");
+        mediaSub = text("", compact ? 13 : 16, SUB, "sans-serif");
         mediaSub.setSingleLine(true);
         mediaSub.setEllipsize(TextUtils.TruncateAt.END);
-        mediaSub.setPadding(0, dp(4), 0, dp(14));
+        mediaSub.setPadding(0, dp(4), 0, compact ? 0 : dp(14));
         info.addView(mediaSub);
 
         LinearLayout controls = new LinearLayout(this);
@@ -406,18 +736,24 @@ public class MainActivity extends Activity implements LocationListener {
         prev.setOnClickListener(v -> transport(Glyph.PREV));
         playBtn.setOnClickListener(v -> transport(Glyph.PLAY));
         next.setOnClickListener(v -> transport(Glyph.NEXT));
-        controls.addView(prev, new LinearLayout.LayoutParams(dp(56), dp(56)));
-        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(60), dp(60));
-        plp.leftMargin = dp(10);
-        plp.rightMargin = dp(10);
+        int side = dp(compact ? 44 : 56), mid = dp(compact ? 50 : 60);
+        controls.addView(prev, new LinearLayout.LayoutParams(side, side));
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(mid, mid);
+        plp.leftMargin = dp(compact ? 6 : 10);
+        plp.rightMargin = dp(compact ? 6 : 10);
         controls.addView(playBtn, plp);
-        controls.addView(next, new LinearLayout.LayoutParams(dp(56), dp(56)));
-        info.addView(controls);
-        card.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
+        controls.addView(next, new LinearLayout.LayoutParams(side, side));
+        if (compact) {
+            card.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
+            card.addView(controls);
+        } else {
+            info.addView(controls);
+            card.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
+        }
         return card;
     }
 
-    private View buildTile(String[] t) {
+    private View buildTile(String[] t, boolean compact) {
         LinearLayout p = panel();
         p.setGravity(Gravity.CENTER);
         pressable(p);
@@ -427,22 +763,24 @@ public class MainActivity extends Activity implements LocationListener {
         } catch (PackageManager.NameNotFoundException e) {
             icon.setAlpha(0.3f);
         }
-        p.addView(icon, new LinearLayout.LayoutParams(dp(72), dp(72)));
-        TextView l = text(t[0], 18, TEXT, "sans-serif-medium");
-        l.setPadding(0, dp(12), 0, 0);
+        int size = dp(compact ? 48 : 72);
+        p.addView(icon, new LinearLayout.LayoutParams(size, size));
+        TextView l = text(t[0], compact ? 14 : 18, TEXT, "sans-serif-medium");
+        l.setPadding(0, dp(compact ? 6 : 12), 0, 0);
         l.setGravity(Gravity.CENTER);
         p.addView(l);
         p.setOnClickListener(v -> launch(t[1], t[2]));
         return p;
     }
 
-    private View buildAllAppsTile() {
+    private View buildAllAppsTile(boolean compact) {
         LinearLayout p = panel();
         p.setGravity(Gravity.CENTER);
         pressable(p);
-        p.addView(new Glyph(this, Glyph.GRID, TEXT, STROKE), new LinearLayout.LayoutParams(dp(72), dp(72)));
-        TextView l = text("All apps", 18, TEXT, "sans-serif-medium");
-        l.setPadding(0, dp(12), 0, 0);
+        int size = dp(compact ? 48 : 72);
+        p.addView(new Glyph(this, Glyph.GRID, TEXT, STROKE), new LinearLayout.LayoutParams(size, size));
+        TextView l = text("All apps", compact ? 14 : 18, TEXT, "sans-serif-medium");
+        l.setPadding(0, dp(compact ? 6 : 12), 0, 0);
         l.setGravity(Gravity.CENTER);
         p.addView(l);
         p.setOnClickListener(v -> openDrawer());
@@ -477,6 +815,11 @@ public class MainActivity extends Activity implements LocationListener {
         grid.setAdapter(adapter);
         grid.setOnItemClickListener((a, v, pos, id) -> {
             AppEntry e = adapter.items.get(pos);
+            if (e.action != null) {
+                e.action.run(); // before closing, so the Maps window is not put back in between
+                closeDrawer();
+                return;
+            }
             try {
                 startActivity(e.intent);
             } catch (Exception ex) {
@@ -486,6 +829,7 @@ public class MainActivity extends Activity implements LocationListener {
         });
         grid.setOnItemLongClickListener((a, v, pos, id) -> {
             AppEntry e = adapter.items.get(pos);
+            if (e.intent == null || e.intent.getComponent() == null) return false;
             startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                 Uri.fromParts("package", e.intent.getComponent().getPackageName(), null))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -516,6 +860,8 @@ public class MainActivity extends Activity implements LocationListener {
     }
 
     private void openDrawer() {
+        if (drawerOpen()) return;
+        suppressMap(); // the Maps window floats above the launcher, so it would cover the drawer
         drawer.setVisibility(View.VISIBLE);
         bg.execute(() -> {
             PackageManager pm = getPackageManager();
@@ -542,18 +888,31 @@ public class MainActivity extends Activity implements LocationListener {
                 list.add(0, stock);
             } catch (PackageManager.NameNotFoundException ignored) {
             }
+            // Second entry: pick the home-screen skin.
+            AppEntry skins = new AppEntry();
+            skins.label = "Skins";
+            skins.icon = getApplicationInfo().loadIcon(pm);
+            skins.action = this::showSkinMenu;
+            list.add(Math.min(1, list.size()), skins);
             ui.post(() -> adapter.set(list));
         });
     }
 
+    private boolean drawerOpen() {
+        return drawer != null && drawer.getVisibility() == View.VISIBLE;
+    }
+
     private void closeDrawer() {
-        if (drawer != null) drawer.setVisibility(View.GONE);
+        if (!drawerOpen()) return;
+        drawer.setVisibility(View.GONE);
+        unsuppressMap();
     }
 
     static final class AppEntry {
         String label;
         Drawable icon;
         Intent intent;
+        Runnable action; // instead of an intent (e.g. "Skins")
     }
 
     private final class AppAdapter extends BaseAdapter {
@@ -625,7 +984,7 @@ public class MainActivity extends Activity implements LocationListener {
         }
         lastLoc = l;
         lastFixAt = SystemClock.elapsedRealtime();
-        cluster.onFix(kmh, l);
+        drive.onFix(kmh, l);
     }
 
     @Override public void onProviderEnabled(String provider) {}
@@ -669,7 +1028,7 @@ public class MainActivity extends Activity implements LocationListener {
     }
 
     private void showCachedWeather() {
-        if (!prefs.contains("w_temp")) return;
+        if (!prefs.contains("w_temp") || weatherTemp == null) return;
         weatherTemp.setText(Math.round(prefs.getFloat("w_temp", 0)) + "°C");
         weatherDesc.setText(Net.weatherLabel(prefs.getInt("w_code", -1)));
     }
@@ -732,7 +1091,7 @@ public class MainActivity extends Activity implements LocationListener {
                         if (dd == day) {
                             times = new long[6];
                             for (int k = 0; k < 6; k++) times[k] = d.getLong(Net.PRAYER_KEYS[k]) * 1000L;
-                            hijriView.setText(Net.hijri(d.optString("hijri", "")));
+                            if (hijriView != null) hijriView.setText(Net.hijri(d.optString("hijri", "")));
                         } else if (dd == day + 1) {
                             tomorrowFajr = d.getLong("fajr") * 1000L;
                         }
@@ -742,13 +1101,15 @@ public class MainActivity extends Activity implements LocationListener {
                 }
             }
             showPlace();
-            DateFormat tf = android.text.format.DateFormat.getTimeFormat(this);
-            for (int k = 0; k < 6; k++) pTime[k].setText(times == null ? "--:--" : tf.format(new Date(times[k])));
+            for (int k = 0; k < 6; k++) {
+                if (pTime[k] != null) pTime[k].setText(times == null ? "--:--" : timeFormat.format(new Date(times[k])));
+            }
         }
 
         if (times == null) {
-            countdown.setText(coords() == null ? "Waiting for GPS location…" : "Loading prayer times…");
+            setCountdown(coords() == null ? "Waiting for GPS location…" : "Loading prayer times…");
             setHighlight(-1);
+            setNext(null, 0);
             return;
         }
         long now = System.currentTimeMillis();
@@ -769,13 +1130,26 @@ public class MainActivity extends Activity implements LocationListener {
             target = tomorrowFajr;
             setHighlight(0);
         } else {
-            countdown.setText("");
+            setCountdown("");
             setHighlight(-1);
+            setNext(null, 0);
             return;
         }
         long mins = (target - now + 59_999) / 60_000;
         String left = mins >= 60 ? (mins / 60) + "h " + (mins % 60) + "m" : mins + " min";
-        countdown.setText(Net.PRAYER_NAMES[next] + " in " + left);
+        setNext(Net.PRAYER_NAMES[next], target);
+        // The next-prayer card (skins 2, 3) already shows the name.
+        setCountdown(nextName != null ? "in " + left : Net.PRAYER_NAMES[next] + " in " + left);
+    }
+
+    private void setCountdown(String s) {
+        if (countdown != null) countdown.setText(s);
+    }
+
+    private void setNext(String name, long at) {
+        if (nextName == null) return;
+        nextName.setText(name == null ? "--" : name);
+        nextTime.setText(name == null ? "--:--" : timeFormat.format(new Date(at)));
     }
 
     /** Place name (cached reverse geocode, else state from the zone code) and the JAKIM zone tag. */
@@ -785,9 +1159,11 @@ public class MainActivity extends Activity implements LocationListener {
         boolean hide = prefs.getBoolean("hide_town", false);
         String place = hide ? Net.stateOfZone(zone) : prefs.getString("loc_name", "");
         if (place.isEmpty()) place = Net.stateOfZone(zone);
-        placeView.setText(place);
-        zoneView.setText(zone);
-        zoneView.setVisibility(zone.isEmpty() || hide ? View.GONE : View.VISIBLE);
+        if (placeView != null) placeView.setText(place);
+        if (zoneView != null) {
+            zoneView.setText(zone);
+            zoneView.setVisibility(zone.isEmpty() || hide ? View.GONE : View.VISIBLE);
+        }
     }
 
     private void maybeFetchPlace() {
@@ -820,6 +1196,7 @@ public class MainActivity extends Activity implements LocationListener {
         if (idx == highlighted) return;
         highlighted = idx;
         for (int k = 0; k < 6; k++) {
+            if (pRow[k] == null) continue; // skins 2 and 3 show only the next prayer
             boolean on = k == idx;
             int base = k == 1 ? SUB : TEXT;
             pRow[k].setBackground(on ? rounded(ACCENT_BG, 12, 0) : null);

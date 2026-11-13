@@ -2,6 +2,24 @@
 
 All settings are constants in `FazzLauncher/src/com/fazrilamin/fazzlauncher/`. After changing any of them, rebuild with `bash FazzLauncher/build.sh` and reinstall with `adb install -r`.
 
+## Skins
+
+Fazz Launcher has three home-screen layouts. The owner picks one on the unit (**All apps → Skins**, a long-press on the clock, or the cluster menu); it's saved as `skin` in prefs.
+
+| # | Skin | Built by | Speed display |
+|---|---|---|---|
+| 1 | Classic | `buildHome()`: clock panel, cluster, prayer list | `ClusterView` |
+| 2 | Map | `buildHomeMap()`: Google Maps window, clock strip, digital speed, next prayer | `DigitalSpeedView` |
+| 3 | Twin dials | `buildHome()`: twin dials, side column with clock and next prayer | `TwinDialView` |
+
+- **Default skin:** `prefs.getInt("skin", SKIN_CLASSIC)` in `onCreate()`.
+- **Adding a skin:**
+  1. Add a constant (`SKIN_*`) and a label in `SKIN_LABELS`, and raise the upper bound in `applySkin()`.
+  2. Build its layout in `buildHome()`. Reuse `buildBottomRow()`, `buildNextPrayerCard()` or `buildPrayerPanel()`, and pass the speed display to `buildDrivePanel()`.
+  3. For a new speed display, extend `DriveView` and implement `draw()`. Read everything from the `DriveModel` you're given; the base class handles the frame loop and colours.
+  4. Set the view fields you use (`weatherTemp`, `countdown`, `placeView`, …). Leave the rest `null`; every update method skips null views.
+- **Skin 2 on other units:** the map window is a Topway firmware feature (see [04 – How it works](04-how-it-works.md#skin-2-the-google-maps-window)). Without it, the panel shows a "tap to open Maps" placeholder. Its layout follows the firmware's window rectangle, so it adapts if your firmware uses another position.
+
 ## Home-screen shortcuts
 
 `MainActivity.TILES` is a list of `{label, package, explicit activity or null}`:
@@ -49,8 +67,8 @@ Notes:
 
 ## Dial scales and speed limit
 
-- **Speedometer top:** `ClusterView.VMAX`, default 220. Match it to your car's speedometer.
-- **Red zone:** `ClusterView.RED_FROM_RPM`, default 6000.
+- **Speedometer top:** `DriveView.VMAX`, default 220. Match it to your car's speedometer. All three skins use it.
+- **Red zone:** `DriveView.RED_FROM_RPM`, default 6000.
 - **Tachometer top:** `DriveModel.RPM_MAX`, default 8000.
 - **Speed-limit warning:** the default comes from `limit_kmh` in `DriveModel.load()` (110). The owner can change it on the unit: long-press the cluster → Speed limit.
 
@@ -67,12 +85,13 @@ The location line uses OpenStreetMap Nominatim and works worldwide. The state fa
 ## Colours
 
 - **Panels and text:** `MainActivity` (`BG`, `PANEL`, `STROKE`, `TEXT`, `SUB`, `ACCENT`).
-- **Drive-mode colours:** `ClusterView` (`C_ECO`, `C_NORMAL`, `C_SPORT`, `C_AMBER`, `C_RED`).
+- **Drive-mode colours:** `DriveView` (`C_ECO`, `C_NORMAL`, `C_SPORT`, `C_AMBER`, `C_RED`).
 
 ## Other screen sizes
 
 The layout was tuned for **1280×720 at density 160**. Check yours with `adb shell wm size` and `adb shell wm density`.
-- `buildHome()` sets the panel proportions: the top row is weighted 0.9 / 1.3 / 0.9, and the bottom row is 176 dp tall.
+- `buildHome()` sets the panel proportions: the top row is weighted 0.9 / 1.3 / 0.9 (Classic) or 2.3 / 0.8 (Twin dials), and the bottom row is 176 dp tall.
+- Skin 2 places its panels around the map window's rectangle in `placeMapSkin()`, and its bottom row is compact.
 - Text sizes are in sp. The cluster scales itself to its panel size.
 - On higher densities or smaller screens, reduce the clock size (92 sp) and the bottom-row height first. Check with screenshots.
 
@@ -81,4 +100,7 @@ The layout was tuned for **1280×720 at density 160**. Check yours with `adb she
 ```
 adb shell am start -n com.fazrilamin.fazzlauncher/.MainActivity --ez hide_town true     # location line shows only the state
 adb shell am start -n com.fazrilamin.fazzlauncher/.MainActivity --ez hide_town false    # back to normal
+adb shell am start -n com.fazrilamin.fazzlauncher/.MainActivity --ei skin 2             # switch skin (1, 2 or 3)
 ```
+
+Skin 2 shows your real map, so blur the map area before you share a screenshot of it.

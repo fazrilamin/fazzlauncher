@@ -1,58 +1,33 @@
 package com.fazrilamin.fazzlauncher;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
-import android.graphics.Typeface;
-import android.location.Location;
-import android.os.SystemClock;
-import android.view.View;
 
 /**
- * Futuristic drive cluster: glowing speed ring, segmented (simulated) RPM ring, gear + rpm readout,
+ * Skin 1 (Classic) drive cluster: glowing speed ring, segmented (simulated) RPM ring, gear + rpm readout,
  * and a bottom strip with a G-ball, eco/optimum block and trip computer.
  * Colour follows the drive mode: ECO green, NORMAL cyan, SPORT orange, over the limit amber/red.
- * All state comes from {@link DriveModel}.
  */
-public class ClusterView extends View {
-    static final int C_ECO = 0xFF4ADE80, C_NORMAL = 0xFF22D3EE, C_SPORT = 0xFFFB923C;
-    static final int C_AMBER = 0xFFF6AD55, C_RED = 0xFFF43F5E;
-    private static final int TRACK = 0xFF262D38, TICK = 0x40FFFFFF, TICK_MAJOR = 0x80FFFFFF;
-    // Dial scales: match your car's own cluster (here 0-220 km/h, 0-8 x1000 rpm, red zone from 6,000).
-    private static final float START = 150f, SWEEP = 240f, VMAX = 220f, RED_FROM_RPM = 6000f;
-    private static final int RPM_SEGMENTS = 48, TRAIL = 24;
-
-    final DriveModel model = new DriveModel();
-
-    private final float d;
-    private boolean gps;
-    private int displayed;
+public class ClusterView extends DriveView {
+    private static final float START = 150f, SWEEP = 240f;
+    private static final int RPM_SEGMENTS = 48;
 
     private final Paint track = stroke(), glowWide = stroke(), glowMid = stroke(), core = stroke(), tipSeg = stroke();
-    private final Paint tick = stroke(), seg = stroke(), ring = stroke(), fill = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint vignette = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint seg = stroke(), vignette = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint digits = text("sans-serif-light"), unit = text("sans-serif-medium");
-    private final Paint label = text("sans-serif-condensed"), small = text("sans-serif"), bold = text("sans-serif-medium");
-    private final RectF oval = new RectF(), box = new RectF();
+    private final Paint label = text("sans-serif-condensed");
+    private final RectF oval = new RectF();
 
     private float cx, cy, r, sw, stripTop;
     private int vignetteColor;
-    private float colR, colG, colB = -1;
-    private long lastColorMs, lastTrailMs;
-    private final float[] trailX = new float[TRAIL], trailY = new float[TRAIL];
-    private int trailHead, trailCount;
 
-    public ClusterView(Context c, SharedPreferences prefs) {
-        super(c);
-        d = c.getResources().getDisplayMetrics().density;
-        model.load(prefs);
+    public ClusterView(Context c, DriveModel model) {
+        super(c, model);
         track.setColor(TRACK);
-        ring.setStrokeWidth(1.2f * d);
-        tick.setStrokeCap(Paint.Cap.BUTT);
         digits.setColor(MainActivity.TEXT);
         digits.setTextAlign(Paint.Align.CENTER);
         digits.setFontFeatureSettings("tnum");
@@ -62,34 +37,7 @@ public class ClusterView extends View {
         label.setColor(MainActivity.SUB);
         label.setTextAlign(Paint.Align.CENTER);
         label.setTextSize(11 * d);
-        small.setColor(MainActivity.SUB);
-        bold.setFontFeatureSettings("tnum");
-        small.setFontFeatureSettings("tnum");
     }
-
-    // ------------------------------------------------------------------ inputs from MainActivity
-
-    void onFix(float kmh, Location l) {
-        gps = true;
-        model.setNoFix(false);
-        model.onFix(kmh, l, SystemClock.uptimeMillis());
-        invalidate();
-    }
-
-    void setGps(boolean fix) {
-        model.setNoFix(!fix);
-        if (fix != gps) {
-            gps = fix;
-            invalidate();
-        }
-    }
-
-    void startDemo() {
-        model.startDemo(SystemClock.uptimeMillis());
-        invalidate();
-    }
-
-    // ------------------------------------------------------------------ layout
 
     @Override
     protected void onSizeChanged(int w, int h, int ow, int oh) {
@@ -111,40 +59,16 @@ public class ClusterView extends View {
         vignetteColor = 0;
     }
 
-    // ------------------------------------------------------------------ draw
-
     @Override
-    protected void onDraw(Canvas c) {
-        if (r <= 0) return;
-        long now = SystemClock.uptimeMillis();
-        boolean more = model.frame(now);
-        DriveModel m = model;
-
-        boolean hardOver = m.mode == DriveModel.OVER && m.speed > m.limit + 10;
-        int target = m.mode == DriveModel.ECO ? C_ECO : m.mode == DriveModel.SPORT ? C_SPORT
-            : m.mode == DriveModel.OVER ? (hardOver ? C_RED : C_AMBER) : C_NORMAL;
-        more |= fadeColor(target, now);
-        int col = rgb();
-        float pulse = 1f;
-        if (hardOver) {
-            pulse = 0.55f + 0.45f * (float) Math.sin(now / 140.0);
-            more = true;
-        }
-
-        // Readout with hysteresis so it doesn't flicker between two integers.
-        if (m.speed < 0.5f) displayed = 0;
-        else if (Math.abs(m.speed - displayed) >= 0.7f) displayed = Math.round(m.speed);
-        boolean showSpeed = m.hasFix() || m.demo;
-
+    protected boolean draw(Canvas c, DriveModel m, int col, long now) {
+        if (r <= 0) return false;
         drawVignette(c, col);
-        drawSpeedRing(c, m, col, pulse);
+        drawSpeedRing(c, m, col);
         drawRpmRing(c, m, col);
-        drawCentre(c, m, col, showSpeed);
-        drawGpsDot(c);
+        drawCentre(c, m, col);
+        drawGpsDot(c, getWidth() - 12 * d, 12 * d);
         drawStrip(c, m, col, now);
-
-        if (more) postInvalidateOnAnimation();
-        else model.idle();
+        return false;
     }
 
     private void drawVignette(Canvas c, int col) {
@@ -155,7 +79,7 @@ public class ClusterView extends View {
         c.drawCircle(cx, cy, r * 1.3f, vignette);
     }
 
-    private void drawSpeedRing(Canvas c, DriveModel m, int col, float pulse) {
+    private void drawSpeedRing(Canvas c, DriveModel m, int col) {
         c.drawArc(oval, START, SWEEP, false, track);
 
         // Speed-limit marker outside the ring.
@@ -163,7 +87,7 @@ public class ClusterView extends View {
             float a = START + SWEEP * m.limit / VMAX;
             tick.setColor(C_AMBER);
             tick.setStrokeWidth(3 * d);
-            radial(c, a, r + sw * 0.9f, r + sw * 2.1f, tick);
+            radial(c, cx, cy, a, r + sw * 0.9f, r + sw * 2.1f, tick);
         }
 
         float frac = DriveModel.clamp(m.speed / VMAX, 0f, 1f);
@@ -194,7 +118,7 @@ public class ClusterView extends View {
             float a = START + SWEEP * v / VMAX;
             tick.setStrokeWidth((major ? 2.2f : 1.4f) * d);
             tick.setColor(v <= m.speed && m.speed > 0.5f ? withAlpha(col, 0xD0) : major ? TICK_MAJOR : TICK);
-            radial(c, a, tOut - (major ? 11 : 6) * d, tOut, tick);
+            radial(c, cx, cy, a, tOut - (major ? 11 : 6) * d, tOut, tick);
             if (major) {
                 double ar = Math.toRadians(a);
                 float lr = tOut - 22 * d;
@@ -213,7 +137,7 @@ public class ClusterView extends View {
             boolean on = i < lit;
             boolean red = i >= redFrom;
             seg.setColor(red ? (on ? C_RED : 0x40F43F5E) : on ? col : 0x26FFFFFF);
-            radial(c, a, rr - half, rr + half, seg);
+            radial(c, cx, cy, a, rr - half, rr + half, seg);
         }
         // "x1000" scale numbers 0..8 just inside the ring.
         int top = Math.round(DriveModel.RPM_MAX / 1000f);
@@ -227,44 +151,22 @@ public class ClusterView extends View {
         label.setColor(MainActivity.SUB);
     }
 
-    private void drawCentre(Canvas c, DriveModel m, int col, boolean showSpeed) {
-        c.drawText(showSpeed ? String.valueOf(displayed) : "--", cx, cy + r * 0.10f, digits);
+    private void drawCentre(Canvas c, DriveModel m, int col) {
+        c.drawText(showSpeed() ? String.valueOf(displayed) : "--", cx, cy + r * 0.10f, digits);
         c.drawText("KM/H", cx, cy + r * 0.24f, unit);
 
         // Gear chip + rpm (simulated).
         float y = cy + r * 0.44f;
-        String g = m.neutral ? "N" : "D" + m.gear;
-        bold.setTextSize(15 * d);
-        bold.setTextAlign(Paint.Align.CENTER);
-        float gw = Math.max(34 * d, bold.measureText(g) + 18 * d), gh = 24 * d;
-        float gx = cx - 8 * d - gw / 2f;
-        box.set(gx - gw / 2f, y - gh / 2f, gx + gw / 2f, y + gh / 2f);
-        ring.setColor(col);
-        ring.setStrokeWidth(1.5f * d);
-        c.drawRoundRect(box, 7 * d, 7 * d, ring);
-        bold.setColor(col);
-        c.drawText(g, gx, y + bold.getTextSize() * 0.36f, bold);
-
-        int rpm = Math.round(m.rpm / 50f) * 50;
+        drawGearChip(c, m, col, cx - 8 * d - 17 * d, y, 15 * d);
+        String rs = rpmText(m.rpm);
         small.setTextSize(14 * d);
         small.setTextAlign(Paint.Align.LEFT);
         small.setColor(MainActivity.TEXT);
-        String rs = rpm < 1000 ? String.valueOf(rpm) : (rpm / 1000) + "," + pad3(rpm % 1000);
         c.drawText(rs, cx + 4 * d, y + small.getTextSize() * 0.36f, small);
         float rw = small.measureText(rs);
         small.setColor(MainActivity.SUB);
         small.setTextSize(11 * d);
         c.drawText(" rpm", cx + 4 * d + rw, y + small.getTextSize() * 0.36f, small);
-    }
-
-    private void drawGpsDot(Canvas c) {
-        float x = getWidth() - 12 * d, y = 12 * d;
-        fill.setColor(gps || model.demo ? MainActivity.ACCENT : 0xFF59616D);
-        c.drawCircle(x, y, 3.5f * d, fill);
-        small.setTextSize(10 * d);
-        small.setTextAlign(Paint.Align.RIGHT);
-        small.setColor(MainActivity.SUB);
-        c.drawText(model.demo ? "DEMO" : gps ? "GPS" : "NO GPS", x - 8 * d, y + 3.5f * d, small);
     }
 
     private void drawStrip(Canvas c, DriveModel m, int col, long now) {
@@ -273,62 +175,21 @@ public class ClusterView extends View {
         c.drawRect(8 * d, stripTop, w - 8 * d, stripTop + 1 * d, fill);
 
         // --- G-ball (real G from GPS)
-        float gcx = sh * 0.55f, gcy = stripTop + sh * 0.54f, gr = sh * 0.36f;
-        ring.setStrokeWidth(1.2f * d);
-        ring.setColor(0x40FFFFFF);
-        c.drawCircle(gcx, gcy, gr, ring);
-        ring.setColor(0x26FFFFFF);
-        c.drawCircle(gcx, gcy, gr * 0.5f, ring);
-        c.drawLine(gcx - gr, gcy, gcx + gr, gcy, ring);
-        c.drawLine(gcx, gcy - gr, gcx, gcy + gr, ring);
-        // The dot shows the force felt: pushed back when accelerating, outward in a bend.
-        float dx = DriveModel.clamp(-m.gLat / 0.5f, -1.1f, 1.1f) * gr;
-        float dy = DriveModel.clamp(m.gLong / 0.5f, -1.1f, 1.1f) * gr;
-        if (now - lastTrailMs > 80) {
-            lastTrailMs = now;
-            trailX[trailHead] = dx;
-            trailY[trailHead] = dy;
-            trailHead = (trailHead + 1) % TRAIL;
-            if (trailCount < TRAIL) trailCount++;
-        }
-        for (int i = 0; i < trailCount; i++) {
-            int idx = (trailHead - 1 - i + TRAIL) % TRAIL;
-            fill.setColor(withAlpha(col, (int) (0x60 * (1f - i / (float) TRAIL))));
-            c.drawCircle(gcx + trailX[idx], gcy + trailY[idx], 2f * d, fill);
-        }
-        fill.setColor(withAlpha(col, 0x50));
-        c.drawCircle(gcx + dx, gcy + dy, 8 * d, fill);
-        fill.setColor(col);
-        c.drawCircle(gcx + dx, gcy + dy, 4.5f * d, fill);
-        float gTot = (float) Math.hypot(m.gLong, m.gLat);
-        small.setTextSize(10 * d);
-        small.setTextAlign(Paint.Align.LEFT);
-        small.setColor(MainActivity.SUB);
-        c.drawText(fmt1(gTot) + "g", gcx + gr * 0.72f, gcy + gr + 2 * d, small);
+        drawGBall(c, m, col, sh * 0.55f, stripTop + sh * 0.54f, sh * 0.36f, now);
 
         // --- Eco / optimum block
         float ex = sh * 1.15f, ew = w * 0.62f - ex;
-        String modeName = m.mode == DriveModel.ECO ? "ECO" : m.mode == DriveModel.SPORT ? "SPORT"
-            : m.mode == DriveModel.OVER ? "LIMIT " + m.limit : "NORMAL";
         bold.setTextSize(16 * d);
         bold.setTextAlign(Paint.Align.LEFT);
         bold.setColor(col);
         bold.setLetterSpacing(0.12f);
-        c.drawText(modeName, ex, stripTop + sh * 0.34f, bold);
+        c.drawText(modeName(m), ex, stripTop + sh * 0.34f, bold);
         bold.setLetterSpacing(0f);
         small.setTextSize(13 * d);
+        small.setTextAlign(Paint.Align.LEFT);
         small.setColor(MainActivity.TEXT);
         c.drawText(m.hint, ex, stripTop + sh * 0.56f, small);
-        int segs = 10;
-        float gap = 4 * d, segW = (ew - gap * (segs - 1)) / segs, by = stripTop + sh * 0.70f, bh = 7 * d;
-        int on = Math.round(m.eco / 10f);
-        for (int i = 0; i < segs; i++) {
-            float x = ex + i * (segW + gap);
-            box.set(x, by, x + segW, by + bh);
-            int segCol = i < 3 ? C_RED : i < 6 ? C_AMBER : C_ECO;
-            fill.setColor(i < on ? segCol : TRACK);
-            c.drawRoundRect(box, 3 * d, 3 * d, fill);
-        }
+        drawEcoBar(c, m.eco, ex, stripTop + sh * 0.70f, ew, 7 * d);
 
         // --- Trip computer (real GPS distance)
         float tx = w - 10 * d;
@@ -348,79 +209,5 @@ public class ClusterView extends View {
             stripTop + sh * 0.68f, small);
         long mins = m.tripMovingMs / 60_000L;
         c.drawText((mins / 60) + ":" + pad2((int) (mins % 60)) + " h", tx, stripTop + sh * 0.86f, small);
-    }
-
-    // ------------------------------------------------------------------ helpers
-
-    /** Smoothly blend the current colour toward {@code target}. Returns true while still fading. */
-    private boolean fadeColor(int target, long now) {
-        float tr = (target >> 16) & 0xFF, tg = (target >> 8) & 0xFF, tb = target & 0xFF;
-        if (colB < 0) {
-            colR = tr;
-            colG = tg;
-            colB = tb;
-            lastColorMs = now;
-            return false;
-        }
-        float dt = Math.min((now - lastColorMs) / 1000f, 0.1f);
-        lastColorMs = now;
-        float k = 1f - (float) Math.exp(-dt / 0.2f);
-        colR += (tr - colR) * k;
-        colG += (tg - colG) * k;
-        colB += (tb - colB) * k;
-        boolean fading = Math.abs(tr - colR) + Math.abs(tg - colG) + Math.abs(tb - colB) > 3f;
-        if (!fading) {
-            colR = tr;
-            colG = tg;
-            colB = tb;
-        }
-        return fading;
-    }
-
-    private int rgb() {
-        return 0xFF000000 | (Math.round(colR) << 16) | (Math.round(colG) << 8) | Math.round(colB);
-    }
-
-    private void radial(Canvas c, float angleDeg, float r1, float r2, Paint p) {
-        double a = Math.toRadians(angleDeg);
-        float cos = (float) Math.cos(a), sin = (float) Math.sin(a);
-        c.drawLine(cx + r1 * cos, cy + r1 * sin, cx + r2 * cos, cy + r2 * sin, p);
-    }
-
-    private static Paint stroke() {
-        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        p.setStyle(Paint.Style.STROKE);
-        p.setStrokeCap(Paint.Cap.ROUND);
-        return p;
-    }
-
-    private static Paint text(String family) {
-        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        p.setTypeface(Typeface.create(family, Typeface.NORMAL));
-        return p;
-    }
-
-    private static int withAlpha(int color, int a) {
-        return (Math.max(0, Math.min(255, a)) << 24) | (color & 0xFFFFFF);
-    }
-
-    private static int mix(int a, int b, float t) {
-        int r = Math.round(((a >> 16) & 0xFF) * (1 - t) + ((b >> 16) & 0xFF) * t);
-        int g = Math.round(((a >> 8) & 0xFF) * (1 - t) + ((b >> 8) & 0xFF) * t);
-        int bl = Math.round((a & 0xFF) * (1 - t) + (b & 0xFF) * t);
-        return 0xFF000000 | (r << 16) | (g << 8) | bl;
-    }
-
-    private static String fmt1(float v) {
-        int t = Math.round(v * 10);
-        return (t / 10) + "." + (t % 10);
-    }
-
-    private static String pad2(int v) {
-        return v < 10 ? "0" + v : String.valueOf(v);
-    }
-
-    private static String pad3(int v) {
-        return v < 10 ? "00" + v : v < 100 ? "0" + v : String.valueOf(v);
     }
 }

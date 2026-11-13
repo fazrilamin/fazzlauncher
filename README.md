@@ -1,10 +1,19 @@
 # Fazz Launcher
 
-A custom launcher for Android car head units, plus a complete, **no-root** guide to getting ADB over Wi-Fi on Topway units. It covers safe debloating, diagnosing vendor app crashes, and a launcher with a futuristic drive cluster, prayer times and a media card.
+A custom launcher for Android car head units, plus a complete, **no-root** guide to getting ADB over Wi-Fi on Topway units. It covers safe debloating, diagnosing vendor app crashes, and a launcher with three skins (a futuristic drive cluster, live Google Maps on the home screen, and classic twin dials), prayer times and a media card.
 
 Built and tested on a **Topway T9** head unit (Allwinner T527, Android 13, 1280×720), from a Windows PC on the same Wi-Fi.
 
 ![Home screen](screenshots/home.png)
+
+### Skins (new in 2.0)
+
+Pick one from **All apps → Skins**, or long-press the clock.
+
+| 1 · Classic | 2 · Map | 3 · Twin dials |
+|---|---|---|
+| ![Classic](screenshots/skin-classic.png) | ![Map](screenshots/skin-map.png) | ![Twin dials](screenshots/skin-dials.png) |
+| Clock, drive cluster, all prayer times | The real Google Maps app in a window on the home screen, digital speed, next prayer | Analog speedometer and tachometer, next prayer |
 
 | Cruising (ECO) | Over the speed limit | Hard braking (SPORT) |
 |---|---|---|
@@ -12,16 +21,18 @@ Built and tested on a **Topway T9** head unit (Allwinner T527, Android 13, 1280�
 
 ## Features
 
+- **Three skins:** Classic, Map and Twin dials. Choose from **All apps → Skins**, by long-pressing the clock, or from the cluster menu. The trip, speed limit and demo carry over when you switch.
+- **Live Google Maps on the home screen (skin 2):** the real Google Maps app runs in a window inside the home screen, the same way the stock Topway launcher does it. No API key. Tap the Maps tile for full screen; press Home and it goes back into the window. Needs Topway firmware with the navigation-window feature and Google Maps set as the navigation app (see [docs/04-how-it-works.md](docs/04-how-it-works.md#skin-2-the-google-maps-window)).
 - **Drive cluster**
   - GPS speed ring with a glow (0–220 km/h);
   - **simulated** RPM ring (0–8,000) and gear chip (N, D1–D4) from a configurable gearbox model;
   - G-ball (real acceleration, braking and cornering force from GPS);
-  - ECO / NORMAL / SPORT driving feedback, with a colour that follows how you drive;
+  - ECO / NORMAL / SPORT driving feedback, with a colour that follows how you drive, and braking feedback ("Braking", "Smooth braking", "Hard braking");
   - speed-limit warning;
   - trip computer: distance, average, top speed and drive time. It resets after the car has been off for 30 minutes.
-  - Long-press the cluster for the speed limit, reset trip, or a 60-second demo drive.
+  - Long-press the cluster for the speed limit, reset trip, a 60-second demo drive, or the skin.
 - **Clock panel:** time, date and Hijri date, plus current weather.
-- **Waktu solat:** JAKIM prayer times for your GPS zone, with the next prayer highlighted and a countdown. The location line shows town, state and zone code. It works offline once loaded. Malaysia only.
+- **Waktu solat:** JAKIM prayer times for your GPS zone, with the next prayer highlighted and a countdown (skins 2 and 3 show only the next prayer). The location line shows town, state and zone code. It works offline once loaded. Malaysia only.
 - **Media card:** shows what Spotify, YouTube or Bluetooth music is playing, with previous, play/pause and next.
 - **Shortcuts:** Spotify, YouTube, Google Maps and Radio, plus an **All apps** drawer whose first entry is always **Stock Home**.
 - **Small:** about 50 KB, no libraries, no ads, no analytics. Your location is only sent to the weather, prayer-time and place-name services.
@@ -33,10 +44,10 @@ Built and tested on a **Topway T9** head unit (Allwinner T527, Android 13, 1280�
 1. **Turn on ADB over Wi-Fi** on the head unit: [docs/01-enable-adb.md](docs/01-enable-adb.md).
    - On Topway: Developer options PIN `7890`, then Wireless debugging password `john@tw-desktop`, then `adb connect <ip>:5555`.
 2. **Install:**
-   - Easiest: the ready-made [`release/FazzLauncher-1.0.apk`](release/), made for Topway 1280×720 units.
+   - Easiest: the ready-made APK from [Releases](https://github.com/fazrilamin/fazzlauncher/releases) (also in [`release/`](release/)), made for Topway 1280×720 units.
    - Or build it yourself: [docs/02-build-install.md](docs/02-build-install.md).
    ```
-   adb install -r release/FazzLauncher-1.0.apk
+   adb install -r release/FazzLauncher-2.0.apk
    adb shell pm grant com.fazrilamin.fazzlauncher android.permission.ACCESS_FINE_LOCATION
    adb shell cmd notification allow_listener com.fazrilamin.fazzlauncher/com.fazrilamin.fazzlauncher.MediaListener
    adb shell am start -n com.fazrilamin.fazzlauncher/.MainActivity                       # try it first
@@ -46,7 +57,7 @@ Built and tested on a **Topway T9** head unit (Allwinner T527, Android 13, 1280�
    - On the unit: Settings → Apps → Default apps → Home app, or use Fazz Launcher's **All apps → Stock Home**.
    - Over ADB: `adb uninstall com.fazrilamin.fazzlauncher`.
 
-Release APK SHA-256: `84c375dedaae531ae611d8661264bba82666f903edc4e2c10554e9e668c10dfa`
+Release APK (2.0) SHA-256: `20ed3737a4ce2d5e77b4dca7c679c7c0783617e28ad758a5511a57529f8c97f9`. What changed: [CHANGELOG.md](CHANGELOG.md).
 
 ## Using an AI agent (Claude Code, Codex)
 
@@ -60,11 +71,12 @@ This repo is written so an AI coding agent can repeat the whole setup on **your*
 |---|---|
 | [01 – Enable ADB](docs/01-enable-adb.md) | Topway codes, connecting, what didn't work, other brands |
 | [02 – Build & install](docs/02-build-install.md) | Toolchain setup, build, permissions, set as home, undo |
-| [03 – Customise](docs/03-customize.md) | Shortcuts, stock home, gearbox model, dial scales, prayer times, colours, other screens |
+| [03 – Customise](docs/03-customize.md) | Skins, shortcuts, stock home, gearbox model, dial scales, prayer times, colours, other screens |
 | [04 – How it works](docs/04-how-it-works.md) | Architecture, data flow, cache, cluster maths, network |
 | [05 – Debloat](docs/05-debloat.md) | Which vendor apps are safe to remove (reversibly), which to never touch |
 | [06 – Radio crash case study](docs/06-radio-crash.md) | Tracing a vendor app's crash from logs and bytecode, without root |
 | [07 – Troubleshooting](docs/07-troubleshooting.md) | Common problems and fixes |
+| [08 – Publishing a release](docs/08-release.md) | Versioning, GitHub Desktop, tagging and attaching the APK |
 
 Helper scripts in [`tools/`](tools/):
 - `find-headunit.ps1` / `.sh` find the unit on your Wi-Fi.

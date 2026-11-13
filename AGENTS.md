@@ -10,7 +10,8 @@ Everything below was done on a real, **non-rooted** head unit, using only a PC o
 2. **Fazz Launcher**, a custom launcher (`FazzLauncher/`, package `com.fazrilamin.fazzlauncher`). It has:
    - a clock with Hijri date and weather;
    - Malaysian JAKIM prayer times with a location line;
-   - a futuristic drive cluster: GPS speed, **simulated** RPM and gear, G-ball, ECO/SPORT feedback, speed-limit warning and trip computer;
+   - three skins: Classic (futuristic drive cluster), Map (the real Google Maps app in a window on the home screen) and Twin dials;
+   - a drive cluster: GPS speed, **simulated** RPM and gear, G-ball, ECO/SPORT and braking feedback, speed-limit warning and trip computer;
    - a Spotify/YouTube/BT media card, app shortcuts and an app drawer.
 
    It's built with plain SDK tools, with no Gradle and no Android Studio.
@@ -85,7 +86,9 @@ All of these are constants near the top of their files:
 | App that "play" opens when nothing is playing | `MainActivity.DEFAULT_MEDIA_APP` |
 | Package visibility (Android 11+) | `<queries>` in `AndroidManifest.xml`; add any package you look up by name |
 | Gearbox model: ratios, final drive, tyre, idle, redline, shift points | `DriveModel` (top) |
-| Dial scales | `ClusterView.VMAX`, `ClusterView.RED_FROM_RPM`, `DriveModel.RPM_MAX` |
+| Dial scales | `DriveView.VMAX`, `DriveView.RED_FROM_RPM`, `DriveModel.RPM_MAX` |
+| Default skin, skin list | `MainActivity.SKIN_*`, `SKIN_LABELS`, `buildHome()` |
+| Google Maps window (skin 2) | `MapHost` (package/activity, fallback rectangle) |
 | Default speed-limit warning | `DriveModel.load()`, default 110 |
 
 Find the radio and other vendor apps' launch activities with:
@@ -117,6 +120,10 @@ adb shell "logcat -d -b crash | grep -A15 com.fazrilamin.fazzlauncher"       # m
 Test hooks. Only use them when the car is stationary (Hard rule 1):
 - `adb shell am start -n com.fazrilamin.fazzlauncher/.MainActivity --ez demo true` runs a 60 s scripted drive. It shifts through the gears, goes ECO → over the limit → corner → hard braking, and never changes the saved trip.
 - `--ez hide_town true` shows only the state on the location line, for screenshots you want to share. Use `--ez hide_town false` to undo it.
+- `--ei skin 1|2|3` switches the skin (Classic, Map, Twin dials). The activity must already be running: start it once without extras, then send the extra.
+- Skin 2 shows the owner's real map around their location. Blur the map area before sharing a screenshot of it.
+
+Skin 2 check (Topway): the Maps tile opens Maps fullscreen, HOME puts it back into the window, opening All apps moves it out of the way. `dumpsys activity activities | grep -m1 'Task{'` shows `mode=freeform` with the window's bounds while it's in the window.
 
 ### Phase 7: revert (always tell the owner how)
 
@@ -132,12 +139,14 @@ Test hooks. Only use them when the car is stationary (Hard rule 1):
 - **No Gradle.** `build.sh` drives `aapt2` → `javac` → `d8` → `zipalign` → `apksigner` directly. Keep it that way, so builds need nothing but JDK 17 and the SDK.
 - **Java 8 syntax only.** JDK 17 rejects `-bootclasspath` for targets above 8, and lambdas need `build-tools/core-lambda-stubs.jar` on the classpath. Both are handled in `build.sh`, so don't use `var`, switch expressions, records or text blocks.
 - **No XML layouts.** `MainActivity` builds the whole UI in code. The only resource is the vector icon.
-- **The loop:** one 1-second `tick` drives the GPS timeout, the prayer countdown, saving the trip and throttled network fetches. `ClusterView` redraws on its own, only while values change.
+- **The loop:** one 1-second `tick` drives the GPS timeout, the prayer countdown, saving the trip and throttled network fetches. The skin's `DriveView` redraws on its own, only while values change.
+- **Skins:** `skin` in prefs (1 Classic, 2 Map, 3 Twin dials). `buildHome()` builds the chosen layout; `applySkin()` swaps it in place (the drawer stays). Views a skin doesn't have stay `null`, so every render method null-checks them.
+- **Skin 2 / `MapHost`:** a Topway framework feature, not a public API. Starting the unit's configured navigation app with the extra `NAVI=OPEN` opens it as a borderless freeform window at the rectangle in `sys.tw.forcepip.x/y/w/h`; skin 2 lays its panels out around that rectangle. The window floats above the launcher, so the drawer and dialogs call `suppressMap()` first (Maps briefly goes fullscreen, then the launcher comes back in front) and `unsuppressMap()` after. HOME turns the window fullscreen behind the launcher, so `onResume()` puts it back.
 - **Offline-first:** everything fetched is cached in `SharedPreferences("fazzlauncher")`:
   - weather `w_*`;
   - prayer month `p_*`;
   - place name `loc_*`;
-  - trip `trip_*`, speed limit `limit_kmh`, privacy `hide_town`.
+  - trip `trip_*`, speed limit `limit_kmh`, privacy `hide_town`, skin `skin`.
 - **Network:**
   - Open-Meteo for weather;
   - `api.waktusolat.app` for JAKIM prayer times by GPS;
@@ -150,7 +159,8 @@ Test hooks. Only use them when the car is stationary (Hard rule 1):
   - The vendor BT app keeps an empty active session, so it must not win.
 - **Drive cluster:**
   - `DriveModel` holds pure state: speed extrapolation between 1 Hz GPS fixes, the gearbox simulation, G-force from Δspeed and Δbearing, the eco score, the trip, and the demo script.
-  - `ClusterView` only draws.
+  - `MainActivity` owns the one `DriveModel`; it survives skin changes.
+  - `DriveView` is the base of the speed displays: the frame loop, mode colour fade, and shared pieces (gear chip, G-ball, eco bar). `ClusterView` (skin 1), `DigitalSpeedView` (skin 2) and `TwinDialView` (skin 3) only draw.
   - GNSS on these units is 1 Hz, even with a 0 ms request interval. Tune `TAU_S` and the extrapolation, not the request rate.
 
 More detail is in [`docs/04-how-it-works.md`](docs/04-how-it-works.md).

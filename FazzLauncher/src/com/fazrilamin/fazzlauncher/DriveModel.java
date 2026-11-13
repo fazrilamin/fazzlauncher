@@ -22,6 +22,10 @@ final class DriveModel {
     private static final float MAX_PREDICT_S = 1.2f;
     private static final float MAX_ACCEL = 30f; // km/h per s
 
+    // ---- braking feedback (km/h per s; 1 g = 35.3 km/h per s)
+    private static final float BRAKE_SOFT = 3f, BRAKE_FIRM = 6f, BRAKE_HARD = 10f;
+    private static final long BRAKE_HOLD_MS = 2000;
+
     // ---- Gearbox model: example 4-speed automatic (1.3 L compact sedan). Edit per car.
     private static final float[] RATIO = {2.919f, 1.551f, 1.000f, 0.713f}; // gear ratios, 1st..4th
     private static final float FINAL_DRIVE = 4.375f;
@@ -53,7 +57,9 @@ final class DriveModel {
     private Location lastTripLoc;
 
     // ---- internal
-    private float lastKmh, accel, accelNow, latRaw;
+    private float lastKmh, accel, accelFast, accelNow, latRaw;
+    private int brakeLevel;    // 0 none, 1 braking, 2 firm, 3 hard
+    private long brakeUntil;   // hold the braking hint so a 1 s event doesn't just flash
     private long lastFixMs, lastFrameMs;
     private boolean noFix = true;
     private float lastBearing = Float.NaN;
@@ -70,12 +76,15 @@ final class DriveModel {
         if (kmh < 2f) kmh = 0f; // ignore GPS jitter while parked
         float dt = (now - lastFixMs) / 1000f;
         boolean regular = lastFixMs != 0 && dt > 0.3f && dt < 3f;
+        float sample = regular ? clamp((kmh - lastKmh) / dt, -MAX_ACCEL, MAX_ACCEL) : 0f;
         if (regular && kmh > 0f && lastKmh > 0f) {
-            float sample = clamp((kmh - lastKmh) / dt, -MAX_ACCEL, MAX_ACCEL);
             accel = accel + (sample - accel) * ACCEL_WEIGHT; // average out single noisy fixes
         } else {
             accel = 0f;
         }
+        // G-force and braking feedback use the unaveraged sample, including the last second
+        // into a stop (kmh == 0), which is usually the hardest part of the braking.
+        accelFast = sample;
         // Lateral acceleration = v * yaw rate, from the change in GPS bearing.
         if (l != null && l.hasBearing() && kmh > 10f) {
             float b = l.getBearing();
@@ -101,6 +110,7 @@ final class DriveModel {
         if (v) {
             lastKmh = 0f;
             accel = 0f;
+            accelFast = 0f;
             latRaw = 0f;
             lastBearing = Float.NaN;
         }
@@ -125,7 +135,7 @@ final class DriveModel {
         boolean predicting = !noFix && accel != 0f && now - lastFixMs < MAX_PREDICT_S * 1000;
 
         boolean fresh = !noFix && now - lastFixMs < 2500;
-        accelNow += ((fresh ? accel : 0f) - accelNow) * alpha(dt, 0.4f);
+        accelNow += ((fresh ? accelFast : 0f) - accelNow) * alpha(dt, 0.3f);
 
         // Gear selection with hysteresis; shift points stretch under acceleration (kickdown feel).
         boolean stopped = speed < 1f;
@@ -146,7 +156,7 @@ final class DriveModel {
         float gl = fresh ? accelNow / 3.6f / 9.81f : 0f;
         float gt = fresh && speed > 10f ? latRaw / 9.81f : 0f;
         float oldLong = gLong, oldLat = gLat;
-        gLong += (clamp(gl, -0.6f, 0.6f) - gLong) * alpha(dt, 0.35f);
+        gLong += (clamp(gl, -0.6f, 0.6f) - gLong) * alpha(dt, 0.25f);
         gLat += (clamp(gt, -0.6f, 0.6f) - gLat) * alpha(dt, 0.35f);
 
         // Eco score: penalties for hard acceleration/braking, high revs, and speed outside 40-100.
@@ -162,12 +172,27 @@ final class DriveModel {
         float oldEco = eco;
         eco += (inst - eco) * alpha(dt, 3f);
 
+        // Braking tiers (km/h per s): 3 ~ 0.08 g gentle, 6 ~ 0.17 g firm, 10 ~ 0.28 g hard.
+        int lvl = accelNow <= -BRAKE_HARD ? 3 : accelNow <= -BRAKE_FIRM ? 2 : accelNow <= -BRAKE_SOFT ? 1 : 0;
+        if (lvl > 0 && (lvl >= brakeLevel || now >= brakeUntil)) {
+            brakeLevel = lvl;
+            brakeUntil = now + BRAKE_HOLD_MS;
+        } else if (now >= brakeUntil) {
+            brakeLevel = 0;
+        }
+
         if (limit > 0 && speed > limit) {
             mode = OVER;
             hint = speed > limit + 10 ? "Slow down" : "Over limit";
-        } else if (accelNow < -9f) {
+        } else if (brakeLevel == 3) {
+            mode = SPORT;
+            hint = "Hard braking";
+        } else if (brakeLevel == 2) {
             mode = SPORT;
             hint = "Smooth braking";
+        } else if (brakeLevel == 1) {
+            mode = eco >= 70f ? ECO : NORMAL;
+            hint = "Braking";
         } else if (accelNow > 7f || rpm > 4000f) {
             mode = SPORT;
             hint = "Ease off";
@@ -185,7 +210,7 @@ final class DriveModel {
             hint = "Steady";
         }
 
-        return demo || predicting
+        return demo || predicting || brakeLevel != 0
             || Math.abs(target - speed) > 0.05f
             || Math.abs(rpmTarget - rpm) > 2f
             || Math.abs(gLong - oldLong) > 0.0005f || Math.abs(gLat - oldLat) > 0.0005f
@@ -285,6 +310,7 @@ final class DriveModel {
         float v = DEMO_V[i] + (DEMO_V[i + 1] - DEMO_V[i]) * k;
         lastKmh = v;
         accel = span <= 0 ? 0 : (DEMO_V[i + 1] - DEMO_V[i]) / span;
+        accelFast = accel;
         lastFixMs = now;
         // A right-hand bend at 43-48 s and a lane change at 25-28 s.
         float lat = 0f;
@@ -306,7 +332,9 @@ final class DriveModel {
         tripMax = savedTripMax;
         lastKmh = 0f;
         accel = 0f;
+        accelFast = 0f;
         latRaw = 0f;
+        brakeLevel = 0;
         noFix = true; // real GPS takes over again on the next fix / tick
     }
 
